@@ -1,15 +1,154 @@
-// ══════════════════════════════════════════════════════════════
-// PRODUCTOS — Pegá estas rutas en tu server.js (index.js)
-// Van después de las rutas de servicios, mismo patrón exacto
-// ══════════════════════════════════════════════════════════════
+import express   from "express";
+import cors      from "cors";
+import { createClient } from "@supabase/supabase-js";
+import bcrypt    from "bcryptjs";
+import jwt       from "jsonwebtoken";
+import multer    from "multer";
+import rateLimit from "express-rate-limit";
 
-// ── UPLOAD IMAGEN (antes que /:id para que no colisione) ──────
+// ══════════════════════════════════════════════════════════════
+// CONFIG
+// ══════════════════════════════════════════════════════════════
+const app        = express();
+const PORT       = process.env.PORT || 10000;
+const JWT_EXPIRY = "7d";
+
+app.set("trust proxy", 1);
+
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_KEY
+);
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 3 * 1024 * 1024 },
+});
+
+// ══════════════════════════════════════════════════════════════
+// MIDDLEWARES
+// ══════════════════════════════════════════════════════════════
+app.use(cors({ origin: "*", methods: ["GET","POST","PUT","DELETE","OPTIONS"] }));
+app.use(express.json({ limit: "10mb" }));
+app.use(rateLimit({ windowMs: 60_000, max: 200 }));
+
+// ══════════════════════════════════════════════════════════════
+// HELPERS
+// ══════════════════════════════════════════════════════════════
+const cleanSlug = (raw = "") =>
+  raw.toLowerCase().trim()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+
+// ══════════════════════════════════════════════════════════════
+// MIDDLEWARE AUTH
+// ══════════════════════════════════════════════════════════════
+function requireAuth(req, res, next) {
+  try {
+    const header = req.headers["authorization"];
+    if (!header?.startsWith("Bearer "))
+      return res.status(401).json({ success: false, error: "No autorizado." });
+
+    const token   = header.split(" ")[1];
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    req.auth      = payload;
+    next();
+  } catch (e) {
+    if (e.name === "TokenExpiredError")
+      return res.status(401).json({ success: false, error: "Sesión expirada." });
+    res.status(401).json({ success: false, error: "Token inválido." });
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// RUTAS BASE
+// ══════════════════════════════════════════════════════════════
+app.get("/",       (_, res) => res.json({ status: "online", service: "panel-productos" }));
+app.get("/health", (_, res) => res.json({ status: "ok" }));
+
+// ══════════════════════════════════════════════════════════════
+// LOGIN — usa la misma tabla usuarios de Associe
+// POST /login
+// ══════════════════════════════════════════════════════════════
+app.post("/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password)
+      return res.status(400).json({ success: false, error: "Faltan email y contraseña." });
+
+    const { data: user, error } = await supabase
+      .from("usuarios")
+      .select("id, slug, password, business_name, nombre_persona, activo")
+      .eq("email", email.trim().toLowerCase())
+      .maybeSingle();
+
+    if (error) throw error;
+    if (!user)
+      return res.status(401).json({ success: false, error: "Credenciales incorrectas." });
+
+    const ok = await bcrypt.compare(String(password), String(user.password));
+    if (!ok)
+      return res.status(401).json({ success: false, error: "Credenciales incorrectas." });
+
+    if (user.activo !== "true" && user.activo !== true)
+      return res.status(403).json({ success: false, error: "Cuenta desactivada." });
+
+    const token = jwt.sign(
+      { slug: user.slug, negocioId: user.id, rol: "owner" },
+      process.env.JWT_SECRET,
+      { expiresIn: JWT_EXPIRY }
+    );
+
+    res.json({
+      success:       true,
+      token,
+      slug:          user.slug,
+      business_name: user.business_name,
+      nombre:        user.nombre_persona,
+    });
+  } catch (e) {
+    console.error("Error login:", e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════
+// VERIFY SESSION
+// GET /verify-session
+// ══════════════════════════════════════════════════════════════
+app.get("/verify-session", async (req, res) => {
+  try {
+    const token = req.headers["authorization"]?.split(" ")[1];
+    if (!token) return res.json({ active: false });
+
+    const payload    = jwt.verify(token, process.env.JWT_SECRET);
+    const { data: user } = await supabase
+      .from("usuarios")
+      .select("slug, business_name, activo")
+      .eq("slug", payload.slug)
+      .maybeSingle();
+
+    if (!user || (user.activo !== "true" && user.activo !== true))
+      return res.json({ active: false });
+
+    res.json({ active: true, slug: user.slug, business_name: user.business_name });
+  } catch {
+    res.json({ active: false });
+  }
+});
+
+// ══════════════════════════════════════════════════════════════
+// PRODUCTOS — UPLOAD IMAGEN
+// POST /admin/productos/upload-imagen
+// ══════════════════════════════════════════════════════════════
 app.post("/admin/productos/upload-imagen", requireAuth, upload.single("imagen"), async (req, res) => {
   try {
     const slug = cleanSlug(req.body.slug || req.auth.slug);
-    if (!req.file) return res.status(400).json({ success: false, error: "No se recibió imagen." });
+    if (!req.file)
+      return res.status(400).json({ success: false, error: "No se recibió imagen." });
 
-    const ext      = req.file.mimetype === "image/png" ? "png" : req.file.mimetype === "image/webp" ? "webp" : "jpg";
+    const ext      = req.file.mimetype === "image/png" ? "png"
+                   : req.file.mimetype === "image/webp" ? "webp" : "jpg";
     const fileName = `${slug}/${Date.now()}.${ext}`;
 
     const { error } = await supabase.storage
@@ -21,12 +160,15 @@ app.post("/admin/productos/upload-imagen", requireAuth, upload.single("imagen"),
     const { data } = supabase.storage.from("productos").getPublicUrl(fileName);
     res.json({ success: true, url: data.publicUrl });
   } catch (e) {
-    console.error("Error upload imagen producto:", e.message);
+    console.error("Error upload imagen:", e.message);
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-// ── GET todos los productos del negocio (admin) ───────────────
+// ══════════════════════════════════════════════════════════════
+// PRODUCTOS — GET admin
+// GET /admin/productos/:slug
+// ══════════════════════════════════════════════════════════════
 app.get("/admin/productos/:slug", requireAuth, async (req, res) => {
   try {
     const slug = cleanSlug(req.params.slug);
@@ -43,11 +185,13 @@ app.get("/admin/productos/:slug", requireAuth, async (req, res) => {
   }
 });
 
-// ── GET productos públicos (para el megacomponente de clientes) ─
+// ══════════════════════════════════════════════════════════════
+// PRODUCTOS — GET público (para clientes)
+// GET /productos/:slug
+// ══════════════════════════════════════════════════════════════
 app.get("/productos/:slug", async (req, res) => {
   try {
     const slug = cleanSlug(req.params.slug);
-    if (!slug) return res.status(400).json({ success: false, error: "Slug inválido." });
     const { data, error } = await supabase
       .from("productos")
       .select("id, nombre, descripcion, precio, imagen_url, categoria")
@@ -62,15 +206,17 @@ app.get("/productos/:slug", async (req, res) => {
   }
 });
 
-// ── POST crear producto ───────────────────────────────────────
+// ══════════════════════════════════════════════════════════════
+// PRODUCTOS — POST crear
+// POST /admin/productos
+// ══════════════════════════════════════════════════════════════
 app.post("/admin/productos", requireAuth, async (req, res) => {
   try {
     const { slug, nombre, precio, categoria, descripcion, imagen_url, activo, orden } = req.body;
     const slugClean = cleanSlug(slug || req.auth.slug);
 
-    if (!slugClean || !nombre || precio === undefined) {
+    if (!slugClean || !nombre || precio === undefined)
       return res.status(400).json({ success: false, error: "Faltan campos: nombre y precio." });
-    }
 
     const { data, error } = await supabase
       .from("productos")
@@ -88,14 +234,16 @@ app.post("/admin/productos", requireAuth, async (req, res) => {
       .single();
 
     if (error) throw error;
-    invalidateCache(slugClean);
     res.status(201).json({ success: true, producto: data });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-// ── PUT editar producto ───────────────────────────────────────
+// ══════════════════════════════════════════════════════════════
+// PRODUCTOS — PUT editar
+// PUT /admin/productos/:id
+// ══════════════════════════════════════════════════════════════
 app.put("/admin/productos/:id", requireAuth, async (req, res) => {
   try {
     const { id }    = req.params;
@@ -120,14 +268,16 @@ app.put("/admin/productos/:id", requireAuth, async (req, res) => {
       .single();
 
     if (error) throw error;
-    invalidateCache(slugClean);
     res.json({ success: true, producto: data });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-// ── DELETE producto ───────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════
+// PRODUCTOS — DELETE
+// DELETE /admin/productos/:id
+// ══════════════════════════════════════════════════════════════
 app.delete("/admin/productos/:id", requireAuth, async (req, res) => {
   try {
     const { id }    = req.params;
@@ -138,9 +288,17 @@ app.delete("/admin/productos/:id", requireAuth, async (req, res) => {
       .eq("id", id)
       .eq("slug", slugClean);
     if (error) throw error;
-    invalidateCache(slugClean);
     res.json({ success: true });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
 });
+
+// ══════════════════════════════════════════════════════════════
+// ARRANQUE
+// ══════════════════════════════════════════════════════════════
+app.listen(PORT, () => {
+  console.log(`Panel Productos API — puerto ${PORT}`);
+});
+
+export default app;
