@@ -206,10 +206,7 @@ app.get("/productos/:slug", async (req, res) => {
   }
 });
 
-// ══════════════════════════════════════════════════════════════
-// PRODUCTOS — POST crear
-// POST /admin/productos
-// ══════════════════════════════════════════════════════════════
+
 app.post("/admin/productos", requireAuth, async (req, res) => {
   try {
     const { slug, nombre, precio, categoria, descripcion, imagen_url, activo, orden } = req.body;
