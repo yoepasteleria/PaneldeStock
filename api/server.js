@@ -6,9 +6,6 @@ import jwt       from "jsonwebtoken";
 import multer    from "multer";
 import rateLimit from "express-rate-limit";
 
-// ══════════════════════════════════════════════════════════════
-// CONFIG
-// ══════════════════════════════════════════════════════════════
 const app        = express();
 const PORT       = process.env.PORT || 10000;
 const JWT_EXPIRY = "7d";
@@ -25,24 +22,12 @@ const upload = multer({
   limits: { fileSize: 3 * 1024 * 1024 },
 });
 
-// ══════════════════════════════════════════════════════════════
-// MIDDLEWARES
-// ══════════════════════════════════════════════════════════════
+// ── Middlewares ─────────────────────────────────────────────
 app.use(cors({ origin: "*", methods: ["GET","POST","PUT","DELETE","OPTIONS"] }));
 app.use(express.json({ limit: "10mb" }));
 app.use(rateLimit({ windowMs: 60_000, max: 200 }));
 
-// ══════════════════════════════════════════════════════════════
-// HELPERS
-// ══════════════════════════════════════════════════════════════
-const cleanSlug = (raw = "") =>
-  raw.toLowerCase().trim()
-    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-
-// ══════════════════════════════════════════════════════════════
-// MIDDLEWARE AUTH
-// ══════════════════════════════════════════════════════════════
+// ── Auth middleware ─────────────────────────────────────────
 function requireAuth(req, res, next) {
   try {
     const header = req.headers["authorization"];
@@ -60,25 +45,20 @@ function requireAuth(req, res, next) {
   }
 }
 
-// ══════════════════════════════════════════════════════════════
-// RUTAS BASE
-// ══════════════════════════════════════════════════════════════
-app.get("/",       (_, res) => res.json({ status: "online", service: "panel-productos" }));
+// ── Rutas base ──────────────────────────────────────────────
+app.get("/",       (_, res) => res.json({ status: "online" }));
 app.get("/health", (_, res) => res.json({ status: "ok" }));
 
-// ══════════════════════════════════════════════════════════════
-// LOGIN — usa la misma tabla usuarios de Associe
-// POST /login
-// ══════════════════════════════════════════════════════════════
-app.post("/login", async (req, res) => {
+// ── POST /auth/login ────────────────────────────────────────
+app.post("/auth/login", async (req, res) => {
   try {
     const { email, password } = req.body;
     if (!email || !password)
       return res.status(400).json({ success: false, error: "Faltan email y contraseña." });
 
     const { data: user, error } = await supabase
-      .from("usuarios")
-      .select("id, slug, password, business_name, nombre_persona, activo")
+      .from("admin_users")
+      .select("id, email, password")
       .eq("email", email.trim().toLowerCase())
       .maybeSingle();
 
@@ -90,66 +70,47 @@ app.post("/login", async (req, res) => {
     if (!ok)
       return res.status(401).json({ success: false, error: "Credenciales incorrectas." });
 
-    if (user.activo !== "true" && user.activo !== true)
-      return res.status(403).json({ success: false, error: "Cuenta desactivada." });
-
     const token = jwt.sign(
-      { slug: user.slug, negocioId: user.id, rol: "owner" },
+      { userId: user.id, email: user.email },
       process.env.JWT_SECRET,
       { expiresIn: JWT_EXPIRY }
     );
 
-    res.json({
-      success:       true,
-      token,
-      slug:          user.slug,
-      business_name: user.business_name,
-      nombre:        user.nombre_persona,
-    });
+    res.json({ success: true, token, email: user.email });
   } catch (e) {
     console.error("Error login:", e.message);
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-// ══════════════════════════════════════════════════════════════
-// VERIFY SESSION
-// GET /verify-session
-// ══════════════════════════════════════════════════════════════
-app.get("/verify-session", async (req, res) => {
+// ── GET /auth/me ────────────────────────────────────────────
+app.get("/auth/me", requireAuth, async (req, res) => {
   try {
-    const token = req.headers["authorization"]?.split(" ")[1];
-    if (!token) return res.json({ active: false });
-
-    const payload    = jwt.verify(token, process.env.JWT_SECRET);
-    const { data: user } = await supabase
-      .from("usuarios")
-      .select("slug, business_name, activo")
-      .eq("slug", payload.slug)
+    const { data: user, error } = await supabase
+      .from("admin_users")
+      .select("id, email")
+      .eq("id", req.auth.userId)
       .maybeSingle();
 
-    if (!user || (user.activo !== "true" && user.activo !== true))
-      return res.json({ active: false });
+    if (error) throw error;
+    if (!user)
+      return res.status(401).json({ success: false, error: "Usuario no encontrado." });
 
-    res.json({ active: true, slug: user.slug, business_name: user.business_name });
-  } catch {
-    res.json({ active: false });
+    res.json({ success: true, email: user.email });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
   }
 });
 
-// ══════════════════════════════════════════════════════════════
-// PRODUCTOS — UPLOAD IMAGEN
-// POST /admin/productos/upload-imagen
-// ══════════════════════════════════════════════════════════════
-app.post("/admin/productos/upload-imagen", requireAuth, upload.single("imagen"), async (req, res) => {
+// ── POST /productos/upload-imagen ───────────────────────────
+app.post("/productos/upload-imagen", requireAuth, upload.single("imagen"), async (req, res) => {
   try {
-    const slug = cleanSlug(req.body.slug || req.auth.slug);
     if (!req.file)
       return res.status(400).json({ success: false, error: "No se recibió imagen." });
 
-    const ext      = req.file.mimetype === "image/png" ? "png"
+    const ext      = req.file.mimetype === "image/png"  ? "png"
                    : req.file.mimetype === "image/webp" ? "webp" : "jpg";
-    const fileName = `${slug}/${Date.now()}.${ext}`;
+    const fileName = `yoe/${Date.now()}.${ext}`;
 
     const { error } = await supabase.storage
       .from("productos")
@@ -158,44 +119,34 @@ app.post("/admin/productos/upload-imagen", requireAuth, upload.single("imagen"),
     if (error) throw error;
 
     const { data } = supabase.storage.from("productos").getPublicUrl(fileName);
-    res.json({ success: true, url: data.publicUrl });
+    res.json({ success: true, imagen_url: data.publicUrl });  // ← clave: imagen_url
   } catch (e) {
-    console.error("Error upload imagen:", e.message);
+    console.error("Error upload:", e.message);
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-// ══════════════════════════════════════════════════════════════
-// PRODUCTOS — GET admin
-// GET /admin/productos/:slug
-// ══════════════════════════════════════════════════════════════
-app.get("/admin/productos/:slug", requireAuth, async (req, res) => {
+// ── GET /productos (admin — todos) ──────────────────────────
+app.get("/productos", requireAuth, async (req, res) => {
   try {
-    const slug = cleanSlug(req.params.slug);
     const { data, error } = await supabase
       .from("productos")
       .select("*")
-      .eq("slug", slug)
       .order("orden",      { ascending: true })
       .order("created_at", { ascending: false });
     if (error) throw error;
-    res.json({ success: true, productos: data || [] });
+    res.json(data || []);   // ← devuelve array directo, como espera el panel
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-// ══════════════════════════════════════════════════════════════
-// PRODUCTOS — GET público (para clientes)
-// GET /productos/:slug
-// ══════════════════════════════════════════════════════════════
-app.get("/productos/:slug", async (req, res) => {
+// ── GET /catalogo (público — solo activos) ──────────────────
+app.get("/catalogo", async (req, res) => {
   try {
-    const slug = cleanSlug(req.params.slug);
     const { data, error } = await supabase
       .from("productos")
       .select("id, nombre, descripcion, precio, imagen_url, categoria")
-      .eq("slug", slug)
       .eq("activo", true)
       .order("orden",      { ascending: true })
       .order("created_at", { ascending: false });
@@ -206,19 +157,17 @@ app.get("/productos/:slug", async (req, res) => {
   }
 });
 
-
-app.post("/admin/productos", requireAuth, async (req, res) => {
+// ── POST /productos ─────────────────────────────────────────
+app.post("/productos", requireAuth, async (req, res) => {
   try {
-    const { slug, nombre, precio, categoria, descripcion, imagen_url, activo, orden } = req.body;
-    const slugClean = cleanSlug(slug || req.auth.slug);
+    const { nombre, precio, categoria, descripcion, imagen_url, activo, orden } = req.body;
 
-    if (!slugClean || !nombre || precio === undefined)
-      return res.status(400).json({ success: false, error: "Faltan campos: nombre y precio." });
+    if (!nombre || precio === undefined)
+      return res.status(400).json({ success: false, error: "Faltan nombre y precio." });
 
     const { data, error } = await supabase
       .from("productos")
       .insert([{
-        slug:        slugClean,
         nombre:      nombre.trim(),
         precio:      Number(precio),
         categoria:   categoria?.trim()   || null,
@@ -231,20 +180,16 @@ app.post("/admin/productos", requireAuth, async (req, res) => {
       .single();
 
     if (error) throw error;
-    res.status(201).json({ success: true, producto: data });
+    res.status(201).json(data);   // ← devuelve objeto directo
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-// ══════════════════════════════════════════════════════════════
-// PRODUCTOS — PUT editar
-// PUT /admin/productos/:id
-// ══════════════════════════════════════════════════════════════
-app.put("/admin/productos/:id", requireAuth, async (req, res) => {
+// ── PUT /productos/:id ──────────────────────────────────────
+app.put("/productos/:id", requireAuth, async (req, res) => {
   try {
-    const { id }    = req.params;
-    const slugClean = cleanSlug(req.body.slug || req.auth.slug);
+    const { id } = req.params;
     const { nombre, precio, categoria, descripcion, imagen_url, activo, orden } = req.body;
 
     const u = {};
@@ -260,30 +205,24 @@ app.put("/admin/productos/:id", requireAuth, async (req, res) => {
       .from("productos")
       .update(u)
       .eq("id", id)
-      .eq("slug", slugClean)
       .select()
       .single();
 
     if (error) throw error;
-    res.json({ success: true, producto: data });
+    res.json(data);   // ← devuelve objeto directo
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
-// ══════════════════════════════════════════════════════════════
-// PRODUCTOS — DELETE
-// DELETE /admin/productos/:id
-// ══════════════════════════════════════════════════════════════
-app.delete("/admin/productos/:id", requireAuth, async (req, res) => {
+// ── DELETE /productos/:id ───────────────────────────────────
+app.delete("/productos/:id", requireAuth, async (req, res) => {
   try {
-    const { id }    = req.params;
-    const slugClean = cleanSlug(req.body?.slug || req.query?.slug || req.auth.slug);
+    const { id } = req.params;
     const { error } = await supabase
       .from("productos")
       .delete()
-      .eq("id", id)
-      .eq("slug", slugClean);
+      .eq("id", id);
     if (error) throw error;
     res.json({ success: true });
   } catch (e) {
@@ -291,9 +230,6 @@ app.delete("/admin/productos/:id", requireAuth, async (req, res) => {
   }
 });
 
-// ══════════════════════════════════════════════════════════════
-// ARRANQUE
-// ══════════════════════════════════════════════════════════════
 app.listen(PORT, () => {
   console.log(`Panel Productos API — puerto ${PORT}`);
 });
