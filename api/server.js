@@ -102,6 +102,25 @@ app.get("/auth/me", requireAuth, async (req, res) => {
   }
 });
 
+// Ruta DEBUG — borrala después
+app.get("/debug-login", async (req, res) => {
+  const { data: user } = await supabase
+    .from("admin_users")
+    .select("id, email, password")
+    .eq("email", "yoepasteleriaweb@gmail.com")
+    .maybeSingle();
+
+  if (!user) return res.json({ error: "Usuario no encontrado en la tabla" });
+
+  const ok = await bcrypt.compare("$claveid1039", user.password);
+  res.json({
+    usuario_encontrado: true,
+    email: user.email,
+    hash_guardado: user.password,
+    bcrypt_ok: ok,
+  });
+});
+
 // ── POST /productos/upload-imagen ───────────────────────────
 app.post("/productos/upload-imagen", requireAuth, upload.single("imagen"), async (req, res) => {
   try {
