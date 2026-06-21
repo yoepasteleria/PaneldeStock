@@ -45,6 +45,24 @@ function requireAuth(req, res, next) {
   }
 }
 
+// ── Helpers de validación para tamaños y sabores ────────────
+function normalizarTamanos(input) {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((t) => ({
+      nombre: String(t?.nombre || "").trim(),
+      precio: Number(t?.precio),
+    }))
+    .filter((t) => t.nombre && !isNaN(t.precio) && t.precio >= 0);
+}
+
+function normalizarSabores(input) {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((s) => String(s || "").trim())
+    .filter(Boolean);
+}
+
 // ── Rutas base ──────────────────────────────────────────────
 app.get("/",       (_, res) => res.json({ status: "online" }));
 app.get("/health", (_, res) => res.json({ status: "ok" }));
@@ -102,25 +120,6 @@ app.get("/auth/me", requireAuth, async (req, res) => {
   }
 });
 
-// Ruta DEBUG — borrala después
-app.get("/debug-login", async (req, res) => {
-  const { data: user } = await supabase
-    .from("admin_users")
-    .select("id, email, password")
-    .eq("email", "yoepasteleriaweb@gmail.com")
-    .maybeSingle();
-
-  if (!user) return res.json({ error: "Usuario no encontrado en la tabla" });
-
-  const ok = await bcrypt.compare("$claveid1039", user.password);
-  res.json({
-    usuario_encontrado: true,
-    email: user.email,
-    hash_guardado: user.password,
-    bcrypt_ok: ok,
-  });
-});
-
 // ── POST /productos/upload-imagen ───────────────────────────
 app.post("/productos/upload-imagen", requireAuth, upload.single("imagen"), async (req, res) => {
   try {
@@ -165,7 +164,7 @@ app.get("/catalogo", async (req, res) => {
   try {
     const { data, error } = await supabase
       .from("productos")
-      .select("id, nombre, descripcion, precio, imagen_url, categoria")
+      .select("id, nombre, descripcion, precio, imagen_url, categoria, tamanos, sabores")
       .eq("activo", true)
       .order("orden",      { ascending: true })
       .order("created_at", { ascending: false });
@@ -179,7 +178,7 @@ app.get("/catalogo", async (req, res) => {
 // ── POST /productos ─────────────────────────────────────────
 app.post("/productos", requireAuth, async (req, res) => {
   try {
-    const { nombre, precio, categoria, descripcion, imagen_url, activo, orden } = req.body;
+    const { nombre, precio, categoria, descripcion, imagen_url, activo, orden, tamanos, sabores } = req.body;
 
     if (!nombre || precio === undefined)
       return res.status(400).json({ success: false, error: "Faltan nombre y precio." });
@@ -194,6 +193,8 @@ app.post("/productos", requireAuth, async (req, res) => {
         imagen_url:  imagen_url          || null,
         activo:      activo !== undefined ? Boolean(activo) : true,
         orden:       parseInt(orden)     || 0,
+        tamanos:     normalizarTamanos(tamanos),
+        sabores:     normalizarSabores(sabores),
       }])
       .select()
       .single();
@@ -209,7 +210,7 @@ app.post("/productos", requireAuth, async (req, res) => {
 app.put("/productos/:id", requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const { nombre, precio, categoria, descripcion, imagen_url, activo, orden } = req.body;
+    const { nombre, precio, categoria, descripcion, imagen_url, activo, orden, tamanos, sabores } = req.body;
 
     const u = {};
     if (nombre      !== undefined) u.nombre      = nombre.trim();
@@ -219,6 +220,8 @@ app.put("/productos/:id", requireAuth, async (req, res) => {
     if (imagen_url  !== undefined) u.imagen_url  = imagen_url || null;
     if (activo      !== undefined) u.activo      = Boolean(activo);
     if (orden       !== undefined) u.orden       = parseInt(orden);
+    if (tamanos     !== undefined) u.tamanos     = normalizarTamanos(tamanos);
+    if (sabores      !== undefined) u.sabores     = normalizarSabores(sabores);
 
     const { data, error } = await supabase
       .from("productos")
