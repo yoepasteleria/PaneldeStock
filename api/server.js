@@ -164,7 +164,7 @@ app.get("/catalogo", async (req, res) => {
   try {
     const { data, error } = await supabase
       .from("productos")
-      .select("id, nombre, descripcion, precio, imagen_url, categoria, tamanos, sabores")
+      .select("id, nombre, descripcion, precio, imagen_url, categoria, unidad_venta, tamanos, sabores")
       .eq("activo", true)
       .order("orden",      { ascending: true })
       .order("created_at", { ascending: false });
@@ -178,7 +178,7 @@ app.get("/catalogo", async (req, res) => {
 // ── POST /productos ─────────────────────────────────────────
 app.post("/productos", requireAuth, async (req, res) => {
   try {
-    const { nombre, precio, categoria, descripcion, imagen_url, activo, orden, tamanos, sabores } = req.body;
+    const { nombre, precio, categoria, descripcion, imagen_url, activo, orden, unidad_venta, tamanos, sabores } = req.body;
 
     if (!nombre || precio === undefined)
       return res.status(400).json({ success: false, error: "Faltan nombre y precio." });
@@ -186,15 +186,16 @@ app.post("/productos", requireAuth, async (req, res) => {
     const { data, error } = await supabase
       .from("productos")
       .insert([{
-        nombre:      nombre.trim(),
-        precio:      Number(precio),
-        categoria:   categoria?.trim()   || null,
-        descripcion: descripcion?.trim() || null,
-        imagen_url:  imagen_url          || null,
-        activo:      activo !== undefined ? Boolean(activo) : true,
-        orden:       parseInt(orden)     || 0,
-        tamanos:     normalizarTamanos(tamanos),
-        sabores:     normalizarSabores(sabores),
+        nombre:        nombre.trim(),
+        precio:        Number(precio),
+        categoria:     categoria?.trim()   || null,
+        descripcion:   descripcion?.trim() || null,
+        imagen_url:    imagen_url          || null,
+        activo:        activo !== undefined ? Boolean(activo) : true,
+        orden:         parseInt(orden)     || 0,
+        unidad_venta:  unidad_venta?.trim() || null,
+        tamanos:       normalizarTamanos(tamanos),
+        sabores:       normalizarSabores(sabores),
       }])
       .select()
       .single();
@@ -210,18 +211,19 @@ app.post("/productos", requireAuth, async (req, res) => {
 app.put("/productos/:id", requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const { nombre, precio, categoria, descripcion, imagen_url, activo, orden, tamanos, sabores } = req.body;
+    const { nombre, precio, categoria, descripcion, imagen_url, activo, orden, unidad_venta, tamanos, sabores } = req.body;
 
     const u = {};
-    if (nombre      !== undefined) u.nombre      = nombre.trim();
-    if (precio      !== undefined) u.precio      = Number(precio);
-    if (categoria   !== undefined) u.categoria   = categoria?.trim() || null;
-    if (descripcion !== undefined) u.descripcion = descripcion?.trim() || null;
-    if (imagen_url  !== undefined) u.imagen_url  = imagen_url || null;
-    if (activo      !== undefined) u.activo      = Boolean(activo);
-    if (orden       !== undefined) u.orden       = parseInt(orden);
-    if (tamanos     !== undefined) u.tamanos     = normalizarTamanos(tamanos);
-    if (sabores      !== undefined) u.sabores     = normalizarSabores(sabores);
+    if (nombre       !== undefined) u.nombre       = nombre.trim();
+    if (precio       !== undefined) u.precio       = Number(precio);
+    if (categoria    !== undefined) u.categoria    = categoria?.trim() || null;
+    if (descripcion  !== undefined) u.descripcion  = descripcion?.trim() || null;
+    if (imagen_url   !== undefined) u.imagen_url   = imagen_url || null;
+    if (activo       !== undefined) u.activo       = Boolean(activo);
+    if (orden        !== undefined) u.orden        = parseInt(orden);
+    if (unidad_venta !== undefined) u.unidad_venta = unidad_venta?.trim() || null;
+    if (tamanos      !== undefined) u.tamanos      = normalizarTamanos(tamanos);
+    if (sabores       !== undefined) u.sabores     = normalizarSabores(sabores);
 
     const { data, error } = await supabase
       .from("productos")
