@@ -63,9 +63,33 @@ function normalizarSabores(input) {
     .filter(Boolean);
 }
 
+// ── DEBUG: chequeo de env vars al arrancar ──────────────────
+console.log("── DEBUG ENV ──────────────────────────");
+console.log("SUPABASE_URL:", JSON.stringify(process.env.SUPABASE_URL));
+console.log("SUPABASE_KEY presente:", !!process.env.SUPABASE_KEY, "| largo:", process.env.SUPABASE_KEY?.length);
+console.log("JWT_SECRET presente:", !!process.env.JWT_SECRET);
+console.log("────────────────────────────────────────");
+
 // ── Rutas base ──────────────────────────────────────────────
 app.get("/",       (_, res) => res.json({ status: "online" }));
 app.get("/health", (_, res) => res.json({ status: "ok" }));
+
+// ── DEBUG: ping directo a Supabase para aislar el problema ──
+app.get("/debug/supabase", async (_, res) => {
+  try {
+    const r = await fetch(`${process.env.SUPABASE_URL}/rest/v1/`, {
+      headers: { apikey: process.env.SUPABASE_KEY },
+    });
+    res.json({ ok: true, status: r.status });
+  } catch (e) {
+    res.status(500).json({
+      ok: false,
+      message: e.message,
+      cause: e.cause ? String(e.cause) : null,
+      causeCode: e.cause?.code || null,
+    });
+  }
+});
 
 // ── POST /auth/login ────────────────────────────────────────
 app.post("/auth/login", async (req, res) => {
@@ -97,6 +121,9 @@ app.post("/auth/login", async (req, res) => {
     res.json({ success: true, token, email: user.email });
   } catch (e) {
     console.error("Error login:", e.message);
+    console.error("Cause:", e.cause);
+    console.error("Cause code:", e.cause?.code);
+    console.error("Stack:", e.stack);
     res.status(500).json({ success: false, error: e.message });
   }
 });
